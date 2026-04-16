@@ -1,0 +1,56 @@
+name: CI
+on:
+  pull_request:
+permissions:
+  contents: read
+  checks: write
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: '25.0.2.10.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - run: corepack enable
+      - run: pnpm install
+      - uses: rhysd/actionlint@v1.7.1
+      - uses: wearerequired/lint-action@v2
+        with:
+          eslint: true
+          eslint_args: './frontend --ext .js,.jsx,.ts,.tsx'
+          prettier: true
+          prettier_args: '--write .'
+          prettier_extensions: 'js,jsx,ts,tsx,json,md,yml,yaml,css,scss,html'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: pnpm lint
+      - name: Frontend unit tests
+        run: cd frontend && npx vitest run __tests__ --reporter=default --reporter=github-actions
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Frontend e2e tests
+        run: cd frontend && npx playwright install --with-deps chromium && npx playwright test --reporter=list,github
+      - name: Backend tests
+        run: cd backend && mvn --no-transfer-progress test
+      - name: Publish backend test results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Backend Test Results
+          path: backend/target/surefire-reports/TEST-*.xml
+          reporter: java-junit
+      - run: pnpm ci:e2e

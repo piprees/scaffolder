@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:18.3-alpine
+    environment:
+      POSTGRES_DB: test_scaffold_app
+      POSTGRES_USER: test_scaffold_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev}
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U test_scaffold_app -d test_scaffold_app']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

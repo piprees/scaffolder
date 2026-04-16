@@ -1,0 +1,20 @@
+{
+  "name": "contract",
+  "private": true,
+  "version": "0.1.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["@nestjs/core", "@openapitools/openapi-generator-cli"]
+  },
+  "scripts": {
+    "generate": "./generate.sh",
+    "lint": "redocly lint ./openapi.yml",
+    "validate": "swagger-cli validate ./openapi.yml"
+  },
+  "dependencies": {
+    "@openapitools/openapi-generator-cli": "2.31.1"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-cli": "4.0.4",
+    "@redocly/cli": "1.32.1"
+  }
+}

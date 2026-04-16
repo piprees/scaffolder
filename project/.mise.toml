@@ -1,0 +1,8 @@
+[tools]
+node = "24.14.1"
+java = "corretto-25.0.2.10.1"
+ruby = "4.0.2"
+doctl = "1.154.0"
+
+[env]
+PNPM_HOME = "{{env.HOME}}/.local/share/pnpm"

@@ -1,0 +1,24 @@
+pre-commit:
+  parallel: true
+  commands:
+    prettier_fix:
+      run: pnpm prettier:write
+      stage_fixed: true
+    backend_format:
+      run: pnpm spotless:apply
+      stage_fixed: true
+    lint_contract:
+      run: pnpm lint:contract
+    lint_frontend_fix:
+      run: pnpm lint:frontend:fix
+      stage_fixed: true
+    lint_backend:
+      run: pnpm lint:backend
+    lint_sql:
+      run: pnpm lint:sql
+    lint_docker:
+      run: pnpm lint:docker
+    test_frontend:
+      run: pnpm --filter frontend test
+    test_backend:
+      run: pnpm --filter backend test

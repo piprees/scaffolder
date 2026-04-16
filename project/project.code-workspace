@@ -1,0 +1,76 @@
+{
+  "folders": [
+    {
+      "name": "Root",
+      "path": ".",
+    },
+    {
+      "name": "Backend",
+      "path": "./backend",
+    },
+    {
+      "name": "Frontend",
+      "path": "./frontend",
+    },
+    {
+      "name": "Bruno",
+      "path": "./bruno",
+    },
+    {
+      "name": "Contract",
+      "path": "./contract",
+    },
+    {
+      "name": "Database",
+      "path": "./database",
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.svn": true,
+      "**/.hg": true,
+      "**/.DS_Store": true,
+      "**/Thumbs.db": true,
+      "./.git": true,
+      "./.bundle": true,
+      "./.copilot": true,
+      "./.github": true,
+      "./.github/workflows": true,
+      "./.idea": true,
+      "./.kamal": true,
+      "./.kiro": true,
+      "./.vscode": true,
+      "./.editorconfig": true,
+      "./.env.example": true,
+      "./.gitignore": true,
+      "./.lefthook.yml": true,
+      "./.mise.toml": true,
+      "./.npmrc": true,
+      "./.nvmrc": true,
+      "./.prettierignore": true,
+      "./.prettierrc": true,
+      "./.ruby-gemset": true,
+      "./.ruby-version": true,
+      "./.scaffolderignore": true,
+      "./.sdkmanrc": true,
+      "./.sqlfluff": true,
+      "./.tool-versions": true,
+      "./Gemfile.lock": true,
+      "./pnpm-workspace.yaml": true,
+      "./project.code-workspace": true,
+      "./teardown.sh": true,
+      "./frontend": true,
+      "./backend": true,
+      "./contract": true
+    }
+  },
+  "mcp": {
+    "servers": {
+      "context7": {
+        "type": "http",
+        "url": "https://mcp.context7.com/mcp",
+        "tools": ["query-docs", "resolve-library-id"],
+      },
+    },
+  }
+}

@@ -1,0 +1,186 @@
+name: Preview
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  deploy-preview:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    env:
+      KAMAL_REGISTRY_USERNAME: ${{ vars.KAMAL_REGISTRY_USERNAME || github.actor }}
+      KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+      OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+      ADMIN_GITHUB_USERNAMES: ${{ secrets.ADMIN_GITHUB_USERNAMES }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+      DROPLET_TAG: ${{ vars.DROPLET_TAG || github.event.repository.name }}
+      DROPLET_IP: ${{ secrets.DROPLET_IP }}
+      APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: digitalocean/action-doctl@v2
+        if: ${{ env.DO_API_TOKEN != '' }}
+        with:
+          token: ${{ env.DO_API_TOKEN }}
+      - name: Resolve DROPLET_IP from tag (fallback to configured value)
+        run: |
+          RESOLVED_DROPLET_IP="${DROPLET_IP:-}"
+          if [[ -n "${DO_API_TOKEN:-}" && -n "${DROPLET_TAG:-}" ]]; then
+            TAGGED_DROPLET_IP="$(doctl --access-token "${DO_API_TOKEN}" compute droplet list --tag-name "${DROPLET_TAG}" --format PublicIPv4 --no-header | awk 'NF {print; exit}' || true)"
+            if [[ -n "${TAGGED_DROPLET_IP}" ]]; then
+              RESOLVED_DROPLET_IP="${TAGGED_DROPLET_IP}"
+              echo "Using droplet IP from tag '${DROPLET_TAG}': ${RESOLVED_DROPLET_IP}"
+            fi
+          fi
+          if [[ -n "${RESOLVED_DROPLET_IP}" ]]; then
+            echo "DROPLET_IP=${RESOLVED_DROPLET_IP}" >> "$GITHUB_ENV"
+          fi
+      - name: Configure SSH key for deploy
+        run: |
+          set -euo pipefail
+          if [[ -z "${DROPLET_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "[ERR] DROPLET_SSH_PRIVATE_KEY secret is required for Kamal preview deploy"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DROPLET_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_ed25519
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "$GITHUB_ENV"
+        env:
+          DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0.2'
+          bundler: 4.0.10
+      - run: bundle config set --local path vendor/bundle
+      - run: bundle install
+      - name: Boot preview database
+        run: bundle exec kamal accessory boot db -d preview --confirmed || true
+      - name: Deploy preview
+        run: bundle exec kamal deploy -d preview
+      - name: Post preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const hostname = process.env.APP_HOSTNAME;
+            const ip = process.env.DROPLET_IP;
+            const url = hostname
+              ? `https://pr-${pr}.${hostname}`
+              : `http://pr-${pr}.${ip}.sslip.io`;
+            const marker = '<!-- preview-url -->';
+            const body = [
+              marker,
+              '🚀 **Preview environment ready!**',
+              '',
+              '| | URL |',
+              '|---|---|',
+              `| 🌐 Frontend | [${url}](${url}) |`,
+              '',
+              `_Updated for commit ${context.sha.slice(0, 7)}_`,
+            ].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr,
+                body,
+              });
+            }
+      - name: Create GitHub Pre-release (preview)
+        if: github.event.action != 'closed'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="preview-pr-${{ github.event.pull_request.number }}"
+          git tag -f "$TAG"
+          git push -f origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Preview for PR #${{ github.event.pull_request.number }}" \
+            --prerelease \
+            --latest=false
+  teardown-preview:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    env:
+      KAMAL_REGISTRY_USERNAME: ${{ vars.KAMAL_REGISTRY_USERNAME || github.actor }}
+      KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+      DROPLET_TAG: ${{ vars.DROPLET_TAG || github.event.repository.name }}
+      DROPLET_IP: ${{ secrets.DROPLET_IP }}
+      APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: digitalocean/action-doctl@v2
+        if: ${{ env.DO_API_TOKEN != '' }}
+        with:
+          token: ${{ env.DO_API_TOKEN }}
+      - name: Resolve DROPLET_IP from tag (fallback to configured value)
+        run: |
+          RESOLVED_DROPLET_IP="${DROPLET_IP:-}"
+          if [[ -n "${DO_API_TOKEN:-}" && -n "${DROPLET_TAG:-}" ]]; then
+            TAGGED_DROPLET_IP="$(doctl --access-token "${DO_API_TOKEN}" compute droplet list --tag-name "${DROPLET_TAG}" --format PublicIPv4 --no-header | awk 'NF {print; exit}' || true)"
+            if [[ -n "${TAGGED_DROPLET_IP}" ]]; then
+              RESOLVED_DROPLET_IP="${TAGGED_DROPLET_IP}"
+              echo "Using droplet IP from tag '${DROPLET_TAG}': ${RESOLVED_DROPLET_IP}"
+            fi
+          fi
+          if [[ -n "${RESOLVED_DROPLET_IP}" ]]; then
+            echo "DROPLET_IP=${RESOLVED_DROPLET_IP}" >> "$GITHUB_ENV"
+          fi
+      - name: Configure SSH key for deploy
+        run: |
+          set -euo pipefail
+          if [[ -z "${DROPLET_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "[ERR] DROPLET_SSH_PRIVATE_KEY secret is required for Kamal preview teardown"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DROPLET_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_ed25519
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "$GITHUB_ENV"
+        env:
+          DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0.2'
+          bundler: 4.0.10
+      - run: bundle config set --local path vendor/bundle
+      - run: bundle install
+      - name: Remove preview app
+        run: bundle exec kamal app remove -d preview --confirmed
+        continue-on-error: true
+      - name: Remove preview accessory
+        run: bundle exec kamal accessory remove db -d preview --confirmed
+        continue-on-error: true

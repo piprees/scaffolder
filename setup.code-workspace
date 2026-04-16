@@ -1,0 +1,49 @@
+{
+  "folders": [
+    {
+      "path": ".",
+    },
+    {
+      "path": "./project",
+    },
+    { "path": "./project/frontend" },
+    { "path": "./project/backend" },
+    { "path": "./project/bruno" },
+    { "path": "./project/database" },
+    { "path": "./project/contract" },
+    {
+      "path": "../scaffolded-application",
+    },
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.git": true,
+      "**/.svn": true,
+      "**/.hg": true,
+      "**/.DS_Store": true,
+      "**/Thumbs.db": true,
+      "project": true,
+      "frontend": true,
+      "backend": true,
+      "bruno": true,
+      "database": true,
+      "contract": true,
+    },
+    "chat.tools.terminal.autoApprove": {
+      "/^bash test\\.sh$/": {
+        "approve": true,
+        "matchCommandLine": true,
+      },
+      "shellcheck": true,
+    },
+  },
+  "mcp": {
+    "servers": {
+      "context7": {
+        "type": "http",
+        "url": "https://mcp.context7.com/mcp",
+        "tools": ["query-docs", "resolve-library-id"],
+      },
+    },
+  },
+}

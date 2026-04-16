@@ -1,0 +1,24 @@
+service: ScaffoldedApplication
+image: ghcr.io/<%= ENV.fetch("KAMAL_REGISTRY_USERNAME").sub(%r{\Aghcr\.io/}, "") %>/scaffolded-application
+servers:
+  web:
+    hosts:
+      - <%= ENV.fetch("DROPLET_IP") %>
+registry:
+  server: ghcr.io
+  username:
+    - KAMAL_REGISTRY_USERNAME
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+builder:
+  arch: amd64
+  context: frontend
+  dockerfile: frontend/Dockerfile
+proxy:
+  app_port: 3000
+  healthcheck:
+    path: /
+  <% if ENV["APP_HOSTNAME"].to_s != "" %>
+  host: <%= ENV.fetch("APP_HOSTNAME") %>
+  ssl: true
+  <% end %>

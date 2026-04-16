@@ -1,0 +1,16 @@
+.env
+.DS_Store
+actionlint
+.env
+.env.local
+.env.*.local
+node_modules/
+project/backend/target/
+project/contract/node_modules/
+project/frontend/node_modules/
+project/frontend/.next/
+project/frontend/test-results/
+project/frontend/playwright-report/
+project/vendor/
+.idea/workspace.xml
+*.log

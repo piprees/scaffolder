@@ -1,0 +1,13 @@
+**/generated/**
+**/node_modules/**
+**/build/**
+**/.next/**
+**/target/**
+frontend/test-results/**
+frontend/playwright-report/**
+pnpm-lock.yaml
+database/*.sql
+backend/src/main/resources/db/migration/*.sql
+config/deploy.yml
+config/deploy.preview.yml
+vendor/**

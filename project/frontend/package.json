@@ -1,0 +1,36 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.1.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "unrs-resolver"]
+  },
+  "scripts": {
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "start": "NEXT_TELEMETRY_DISABLED=1 next start -H 127.0.0.1 -p 3000",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run __tests__ || true",
+    "e2e": "playwright install --with-deps chromium && playwright test"
+  },
+  "dependencies": {
+    "next": "15.5.15",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0",
+    "@tailwindcss/postcss": "4.2.2",
+    "@types/node": "24.7.2",
+    "@types/react": "19.1.13",
+    "@types/react-dom": "19.1.9",
+    "eslint": "8.57.1",
+    "eslint-config-next": "15.5.15",
+    "eslint-config-prettier": "9.1.0",
+    "tailwindcss": "4.2.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

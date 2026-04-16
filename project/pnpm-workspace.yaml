@@ -1,0 +1,14 @@
+packages:
+  - 'frontend'
+  - 'backend'
+  - 'contract'
+
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - '@openapitools/openapi-generator-cli'
+  - core-js
+  - esbuild
+  - lefthook
+  - protobufjs
+  - sharp
+  - unrs-resolver

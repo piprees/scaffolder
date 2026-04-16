@@ -1,0 +1,4 @@
+# Files excluded from scaffolding.
+# These files are not copied to the generated project directory.
+# .env is generated dynamically by setup.sh with real secret values.
+.env

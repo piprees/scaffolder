@@ -1,0 +1,325 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rhysd/actionlint@v1.7.12
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: Lint shell scripts
+        run: shellcheck "setup.sh" "teardown.sh" "test.sh"
+      - name: Run setup dry-run test
+        env:
+          SETUP_COMPACT_OUTPUT: "1"
+        run: bash test.sh
+
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: corretto
+          java-version: "25"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+      - name: Generate scaffold and run generated lint/test suite
+        env:
+          DRY_RUN: "true"
+          NON_INTERACTIVE: "true"
+          SETUP_COMPACT_OUTPUT: "1"
+          PROJECT_DIR: /tmp/scaffolder-dry-run
+          OAUTH_CLIENT_ID: test-client-id
+          OAUTH_CLIENT_SECRET: test-client-secret
+          ADMIN_GITHUB_USERNAMES: testadmin
+          DO_API_TOKEN: test-token
+          KAMAL_REGISTRY_USERNAME: test-registry-user
+          KAMAL_REGISTRY_PASSWORD: test-registry-pw
+          DROPLET_IP: 127.0.0.1
+        run: |
+          rm -rf "${PROJECT_DIR}"
+          bash ./setup.sh
+          cd "${PROJECT_DIR}"
+          corepack enable
+          pnpm install
+          pnpm run ci
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: smoke-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    env:
+      PROJECT_DIR: /tmp/smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      APP_NAME: smoke
+      DROPLET_SIZE: ${{ vars.DROPLET_SIZE || 's-1vcpu-1gb' }}
+      DROPLET_REGION: ${{ vars.DROPLET_REGION || 'lon1' }}
+      DROPLET_IMAGE: ${{ vars.DROPLET_IMAGE || 'ubuntu-24-04-x64' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DO_API_TOKEN }}
+      - name: Pre-flight cleanup of orphaned droplets
+        env:
+          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+        run: |
+          set +e
+          if [[ -z "${DO_API_TOKEN:-}" ]]; then
+            echo "[WARN] DO_API_TOKEN not set, skipping pre-flight cleanup"
+            exit 0
+          fi
+          DROPLET_TAG="${APP_NAME}"
+          echo "Checking for orphaned droplets with tag '${DROPLET_TAG}'..."
+          DROPLET_IDS="$(doctl --access-token "${DO_API_TOKEN}" compute droplet list \
+            --tag-name "${DROPLET_TAG}" --format ID --no-header 2>/dev/null || true)"
+          if [[ -n "${DROPLET_IDS}" ]]; then
+            while IFS= read -r id; do
+              [[ -z "${id}" ]] && continue
+              echo "Deleting orphaned droplet ${id}..."
+              doctl --access-token "${DO_API_TOKEN}" compute droplet delete "${id}" --force \
+                || echo "[WARN] Failed to delete droplet ${id}"
+            done <<< "${DROPLET_IDS}"
+            echo "Waiting 10s for droplet deletion to propagate..."
+            sleep 10
+          else
+            echo "No orphaned droplets found."
+          fi
+          exit 0
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.2"
+          bundler: 4.0.10
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: corretto
+          java-version: "25"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: Configure SSH key for droplet access
+        run: |
+          set -euo pipefail
+          if [[ -z "${DROPLET_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "[ERR] DROPLET_SSH_PRIVATE_KEY secret is required for Kamal deploy/teardown"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DROPLET_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_ed25519
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "$GITHUB_ENV"
+        env:
+          DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
+
+      - name: Setup project + provision droplet + deploy app (no dry-run)
+        id: scaffold
+        env:
+          NON_INTERACTIVE: "true"
+          DRY_RUN: "false"
+          PROJECT_DIR: ${{ env.PROJECT_DIR }}
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          ADMIN_GITHUB_USERNAMES: ${{ secrets.ADMIN_GITHUB_USERNAMES }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+          DROPLET_SSH_KEY_FINGERPRINT: ${{ secrets.DROPLET_SSH_KEY_FINGERPRINT }}
+          DROPLET_SIZE: ${{ env.DROPLET_SIZE }}
+          DROPLET_REGION: ${{ env.DROPLET_REGION }}
+          DROPLET_IMAGE: ${{ env.DROPLET_IMAGE }}
+          KAMAL_REGISTRY_USERNAME: ${{ vars.KAMAL_REGISTRY_USERNAME || github.actor }}
+          KAMAL_REGISTRY_PASSWORD: ${{ github.token }}
+          APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+        run: |
+          set -euo pipefail
+          bash ./setup.sh "${APP_NAME}"
+          # Read required/optional keys from dotenv without executing it.
+          DROPLET_ID="$(grep '^#\?DROPLET_ID=' "${PROJECT_DIR}/.env" | head -n1 | sed 's/^#//' | cut -d= -f2- || true)"
+          DROPLET_IP="$(grep '^#\?DROPLET_IP=' "${PROJECT_DIR}/.env" | head -n1 | sed 's/^#//' | cut -d= -f2- || true)"
+          DROPLET_TAG="$(grep '^#\?DROPLET_TAG=' "${PROJECT_DIR}/.env" | head -n1 | sed 's/^#//' | cut -d= -f2- || true)"
+          APP_HOSTNAME="$(grep '^#\?APP_HOSTNAME=' "${PROJECT_DIR}/.env" | head -n1 | sed 's/^#//' | cut -d= -f2- || true)"
+          if [[ -n "${DO_API_TOKEN:-}" && -n "${DROPLET_TAG:-}" ]]; then
+            TAGGED_DROPLET_IP="$(doctl --access-token "${DO_API_TOKEN}" compute droplet list --tag-name "${DROPLET_TAG}" --format PublicIPv4 --no-header | awk 'NF {print; exit}' || true)"
+            if [[ -n "${TAGGED_DROPLET_IP}" ]]; then
+              if [[ -n "${DROPLET_IP}" && "${TAGGED_DROPLET_IP}" != "${DROPLET_IP}" ]]; then
+                echo "[WARN] Droplet tag '${DROPLET_TAG}' resolved '${TAGGED_DROPLET_IP}', overriding stale DROPLET_IP '${DROPLET_IP}'." >&2
+              fi
+              DROPLET_IP="${TAGGED_DROPLET_IP}"
+            fi
+          fi
+          {
+            echo "droplet_id=${DROPLET_ID}"
+            echo "droplet_ip=${DROPLET_IP}"
+            echo "droplet_tag=${DROPLET_TAG}"
+            echo "app_hostname=${APP_HOSTNAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('project/frontend/package.json') }}
+      - name: Install generated project dependencies for smoke checks
+        run: |
+          set -euo pipefail
+          cd "${PROJECT_DIR}"
+          corepack enable
+          pnpm install
+
+      - name: Deploy to the real droplet and run post-deploy checks
+        id: deploy_verify
+        env:
+          DROPLET_IP: ${{ steps.scaffold.outputs.droplet_ip }}
+          APP_HOSTNAME: ${{ steps.scaffold.outputs.app_hostname }}
+        run: |
+          set -euo pipefail
+          cd "${PROJECT_DIR}"
+
+          PRIMARY_BASE_URL="http://${DROPLET_IP}"
+          BASE_URL="${PRIMARY_BASE_URL}"
+          PREFERRED_BASE_URL="${PRIMARY_BASE_URL}"
+
+          if [[ -n "${APP_HOSTNAME:-}" ]]; then
+            PREFERRED_BASE_URL="https://${APP_HOSTNAME}"
+          fi
+
+          echo "Checking primary app endpoint ${PREFERRED_BASE_URL}/"
+          if curl --fail --show-error --retry 30 --retry-delay 10 --retry-connrefused --retry-all-errors --connect-timeout 10 --max-time 30 --output /dev/null --url "${PREFERRED_BASE_URL}/"; then
+            BASE_URL="${PREFERRED_BASE_URL}"
+          else
+            echo "[ERR] Primary app endpoint check failed at ${PREFERRED_BASE_URL}/" >&2
+            echo "[diag] GET ${PREFERRED_BASE_URL}/" >&2
+            curl --silent --show-error --include --max-time 20 "${PREFERRED_BASE_URL}/" || true
+            if [[ -n "${APP_HOSTNAME:-}" ]]; then
+              echo "[diag] TLS probe for ${APP_HOSTNAME}:443" >&2
+              if command -v openssl >/dev/null 2>&1; then
+                printf '' | openssl s_client -connect "${APP_HOSTNAME}:443" -servername "${APP_HOSTNAME}" -brief 2>&1 | head -n 40 || true
+              fi
+              echo "[diag] GET ${PRIMARY_BASE_URL}/ (expected 404 when APP_HOSTNAME host-routing is enabled)" >&2
+              curl --silent --show-error --include --max-time 20 "${PRIMARY_BASE_URL}/" || true
+            fi
+            exit 1
+          fi
+
+          API_HEALTH_URL="${BASE_URL}/api/admin/health"
+          echo "Checking API health endpoint ${API_HEALTH_URL}"
+          if curl --silent --show-error --fail --retry 20 --retry-delay 3 --retry-connrefused --retry-all-errors --connect-timeout 10 --max-time 30 "${API_HEALTH_URL}" > /tmp/admin-health.json; then
+            cat /tmp/admin-health.json
+          else
+            echo "[ERR] Required API health endpoint check failed at ${API_HEALTH_URL}" >&2
+            echo "[diag] GET ${API_HEALTH_URL}" >&2
+            curl --silent --show-error --include --max-time 20 "${API_HEALTH_URL}" || true
+            exit 1
+          fi
+
+          curl --silent --show-error --fail --retry 10 --retry-delay 3 --retry-connrefused --retry-all-errors "${BASE_URL}/api/user/profile" > /tmp/user-profile.json
+          cat /tmp/user-profile.json
+
+          echo "Running Bruno API smoke tests against ${BASE_URL}"
+          sed -i "s#baseUrl: http://127.0.0.1:8080#baseUrl: ${BASE_URL}#" bruno/environments/ci.bru
+          cd bruno
+          pnpm exec bru run --env ci
+
+      - name: Visual smoke check (screenshot)
+        id: visual
+        env:
+          DROPLET_IP: ${{ steps.scaffold.outputs.droplet_ip }}
+          APP_HOSTNAME: ${{ steps.scaffold.outputs.app_hostname }}
+        run: |
+          set -euo pipefail
+          cd "${PROJECT_DIR}"
+          pnpm --filter frontend exec playwright install --with-deps chromium
+          if [[ -n "${APP_HOSTNAME:-}" ]]; then
+            SCREENSHOT_URL="https://${APP_HOSTNAME}"
+          else
+            SCREENSHOT_URL="http://${DROPLET_IP}"
+          fi
+          pnpm --filter frontend exec playwright screenshot "${SCREENSHOT_URL}" "${RUNNER_TEMP}/real-deployment-home.png"
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-deployment-home
+          path: ${{ runner.temp }}/real-deployment-home.png
+          if-no-files-found: ignore
+
+      - name: Teardown local and remote resources
+        if: always()
+        id: teardown
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          ADMIN_GITHUB_USERNAMES: ${{ secrets.ADMIN_GITHUB_USERNAMES }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          KAMAL_REGISTRY_USERNAME: ${{ vars.KAMAL_REGISTRY_USERNAME || github.actor }}
+          KAMAL_REGISTRY_PASSWORD: ${{ github.token }}
+          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+          DROPLET_ID: ${{ steps.scaffold.outputs.droplet_id }}
+          DROPLET_IP: ${{ steps.scaffold.outputs.droplet_ip }}
+          DROPLET_TAG: ${{ steps.scaffold.outputs.droplet_tag }}
+          DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
+        run: |
+          set +e
+          if [[ -d "${PROJECT_DIR}" ]]; then
+            cd "${PROJECT_DIR}" || exit 0
+            if [[ -n "${DROPLET_SSH_PRIVATE_KEY:-}" ]]; then
+              mkdir -p ~/.ssh
+              printf '%s\n' "${DROPLET_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+              chmod 600 ~/.ssh/id_ed25519
+              eval "$(ssh-agent -s)"
+              ssh-add ~/.ssh/id_ed25519
+            fi
+            timeout 300 bash ./teardown.sh || echo "[WARN] teardown.sh timed out or failed"
+          fi
+          # Fallback: delete any droplets tagged with APP_NAME regardless of
+          # whether the generated teardown.sh succeeded.  This catches orphans
+          # left by cancelled runs where teardown never completed.
+          FALLBACK_TAG="${DROPLET_TAG:-${APP_NAME}}"
+          if [[ -n "${DO_API_TOKEN:-}" && -n "${FALLBACK_TAG}" ]]; then
+            echo "Fallback cleanup: checking for remaining droplets with tag '${FALLBACK_TAG}'..."
+            REMAINING="$(doctl --access-token "${DO_API_TOKEN}" compute droplet list \
+              --tag-name "${FALLBACK_TAG}" --format ID --no-header 2>/dev/null || true)"
+            if [[ -n "${REMAINING}" ]]; then
+              while IFS= read -r id; do
+                [[ -z "${id}" ]] && continue
+                echo "Deleting remaining droplet ${id} (tag: ${FALLBACK_TAG})..."
+                doctl --access-token "${DO_API_TOKEN}" compute droplet delete "${id}" --force \
+                  || echo "[WARN] Failed to delete droplet ${id}"
+              done <<< "${REMAINING}"
+            else
+              echo "No remaining droplets found for tag '${FALLBACK_TAG}'."
+            fi
+          fi
+          exit 0

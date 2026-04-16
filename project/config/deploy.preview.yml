@@ -1,0 +1,22 @@
+service: ScaffoldedApplication-pr-<%= ENV.fetch("PR_NUMBER") %>
+proxy:
+  app_port: 3000
+  healthcheck:
+    path: /
+  host: pr-<%= ENV.fetch("PR_NUMBER") %>.<%= ENV["APP_HOSTNAME"].to_s != "" ? ENV.fetch("APP_HOSTNAME") : "#{ENV.fetch("DROPLET_IP")}.sslip.io" %>
+  ssl: true
+accessories:
+  db:
+    image: postgres:18.3-alpine
+    host: <%= ENV.fetch("DROPLET_IP") %>
+    env:
+      clear:
+        POSTGRES_DB: scaffolded_application_pr_<%= ENV.fetch("PR_NUMBER") %>
+        POSTGRES_USER: scaffolded_application
+      secret:
+        - POSTGRES_PASSWORD
+    directories:
+      - data:/var/lib/postgresql/data
+    files:
+      - database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql

@@ -1,0 +1,102 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      KAMAL_REGISTRY_USERNAME: ${{ vars.KAMAL_REGISTRY_USERNAME || github.actor }}
+      KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+      OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+      ADMIN_GITHUB_USERNAMES: ${{ secrets.ADMIN_GITHUB_USERNAMES }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
+      DROPLET_TAG: ${{ vars.DROPLET_TAG || github.event.repository.name }}
+      DROPLET_IP: ${{ secrets.DROPLET_IP }}
+      APP_HOSTNAME: ${{ vars.APP_HOSTNAME }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: digitalocean/action-doctl@v2
+        if: ${{ env.DO_API_TOKEN != '' }}
+        with:
+          token: ${{ env.DO_API_TOKEN }}
+      - name: Resolve DROPLET_IP from tag (fallback to configured value)
+        run: |
+          RESOLVED_DROPLET_IP="${DROPLET_IP:-}"
+          if [[ -n "${DO_API_TOKEN:-}" && -n "${DROPLET_TAG:-}" ]]; then
+            TAGGED_DROPLET_IP="$(doctl --access-token "${DO_API_TOKEN}" compute droplet list --tag-name "${DROPLET_TAG}" --format PublicIPv4 --no-header | awk 'NF {print; exit}' || true)"
+            if [[ -n "${TAGGED_DROPLET_IP}" ]]; then
+              RESOLVED_DROPLET_IP="${TAGGED_DROPLET_IP}"
+              echo "Using droplet IP from tag '${DROPLET_TAG}': ${RESOLVED_DROPLET_IP}"
+            fi
+          fi
+          if [[ -n "${RESOLVED_DROPLET_IP}" ]]; then
+            echo "DROPLET_IP=${RESOLVED_DROPLET_IP}" >> "$GITHUB_ENV"
+          fi
+      - name: Configure SSH key for deploy
+        run: |
+          set -euo pipefail
+          if [[ -z "${DROPLET_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "[ERR] DROPLET_SSH_PRIVATE_KEY secret is required for Kamal deploy"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DROPLET_SSH_PRIVATE_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_ed25519
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "$GITHUB_ENV"
+        env:
+          DROPLET_SSH_PRIVATE_KEY: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0.2'
+          bundler: 4.0.10
+      - run: bundle config set --local path vendor/bundle
+      - run: bundle install
+      - run: bundle exec kamal deploy
+      - name: Post-deploy health check
+        run: |
+          APP_HOST="$(ruby -ryaml -e '
+            begin
+              config = YAML.safe_load_file("config/deploy.yml", permitted_classes: [], aliases: false) || {}
+            rescue StandardError => e
+              warn "Failed to parse config/deploy.yml: #{e.message}"
+              exit 1
+            end
+            hosts = config.dig("servers", "web", "hosts") || []
+            puts hosts.first.to_s
+          ')"
+          if [[ -z "${APP_HOST}" ]]; then
+            echo "Could not determine app host from config/deploy.yml"
+            exit 1
+          fi
+          if [[ ! "${APP_HOST}" =~ ^localhost$ ]] &&
+            [[ ! "${APP_HOST}" =~ ^((25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})$ ]] &&
+            [[ ! "${APP_HOST}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$ ]]; then
+            echo "Invalid app host format in config/deploy.yml: ${APP_HOST}"
+            exit 1
+          fi
+          if [[ -n "${APP_HOSTNAME:-}" ]]; then
+            APP_URL="https://${APP_HOSTNAME}"
+          else
+            APP_URL="http://${APP_HOST}"
+          fi
+          echo "Checking ${APP_URL}"
+          curl --fail --show-error --retry 30 --retry-delay 10 --retry-connrefused --retry-all-errors --connect-timeout 10 --max-time 30 --output /dev/null --url "${APP_URL}/"
+      - name: Create GitHub Release (production)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          git tag -a "$TAG" -m "Production release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes

@@ -1,0 +1,6 @@
+<component name="SaveActionSettings">
+  <option name="activateOnSave" value="true" />
+  <option name="formatOnlyChangedLines" value="false" />
+  <option name="reformat" value="true" />
+  <option name="optimizeImports" value="true" />
+</component>

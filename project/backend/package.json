@@ -1,0 +1,13 @@
+{
+  "name": "backend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "export POSTGRES_PASSWORD=$(grep -m1 '^POSTGRES_PASSWORD=' ../.env | cut -d'=' -f2-) && docker compose --file ../docker-compose.dev.yml up -d db --remove-orphans && ./wait-for-postgres.sh && mvn --no-transfer-progress spring-boot:run",
+    "install": "mvn --no-transfer-progress -DskipTests dependency:go-offline",
+    "lint": "mvn --no-transfer-progress checkstyle:check sortpom:verify",
+    "test": "mvn --no-transfer-progress test",
+    "format": "mvn --no-transfer-progress sortpom:sort",
+    "seed": "echo 'backend seed placeholder'"
+  }
+}
